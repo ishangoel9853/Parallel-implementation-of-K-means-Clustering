@@ -12,6 +12,7 @@
 
 #include <omp.h>
 int      _debug;
+#define MAX_CHAR_PER_LINE 128
 
 
 double wtime(void)
@@ -26,6 +27,127 @@ double wtime(void)
     now_time = ((double)etstart.tv_sec) +              /* in seconds */
                ((double)etstart.tv_usec) / 1000000.0;  /* in microseconds */
     return now_time;
+}
+
+
+float** file_read(char *filename,int  *numObjs,int  *dimensions){
+
+    float **objects;
+    int     i, j, len;
+    ssize_t numBytesRead;
+
+        FILE *infile;
+        char *line, *ret;
+        int   lineLen;
+
+        if ((infile = fopen(filename, "r")) == NULL) {
+            fprintf(stderr, "Error: no such file (%s)\n", filename);
+            return NULL;
+        }
+
+        /*finding the nmber of objects */
+        lineLen = MAX_CHAR_PER_LINE;
+        line = (char*) malloc(lineLen);
+        assert(line != NULL);
+
+        (*numObjs) = 0;
+        while (fgets(line, lineLen, infile) != NULL) {
+            while (strlen(line) == lineLen-1) {
+                len = strlen(line);
+                fseek(infile, -len, SEEK_CUR);
+
+                lineLen += MAX_CHAR_PER_LINE;     /* increasing lineLen */
+
+                line = (char*) realloc(line, lineLen);
+                assert(line != NULL);
+
+                ret = fgets(line, lineLen, infile);
+                assert(ret != NULL);
+            }
+
+            if (strtok(line, " \t\n") != 0)
+                (*numObjs)++;
+        }
+        rewind(infile);
+
+        //printf("lineLen = %d\n",lineLen);
+
+        /* find the no. objects of each object */
+        (*dimensions) = 0;
+        while (fgets(line, lineLen, infile) != NULL) {
+            if (strtok(line, " \t\n") != 0) {
+                while (strtok(NULL, " ,\t\n") != NULL) (*dimensions)++;
+                break;
+            }
+        }
+
+        rewind(infile);
+        printf("File %s numObjs   = %d\n",filename,*numObjs);
+        printf("File %s dimensions = %d\n",filename,*dimensions);
+
+        len = (*numObjs) * (*dimensions);
+
+        objects    = (float**)malloc((*numObjs) * sizeof(float*));
+        assert(objects != NULL);
+
+        objects[0] = (float*) malloc(len * sizeof(float));
+        assert(objects[0] != NULL);
+
+        for (i=1; i<(*numObjs); i++)
+            objects[i] = objects[i-1] + (*dimensions);
+
+        i = 0;
+
+        while (fgets(line, lineLen, infile) != NULL) {
+
+            if (strtok(line, " \t\n") == NULL)
+              continue;
+
+            for (j=0; j<(*dimensions); j++)
+                objects[i][j] = atof(strtok(NULL, " ,\t\n"));
+            i++;
+        }
+
+        fclose(infile);
+        free(line);
+
+    return objects;
+}
+
+
+
+int file_write(char *filename,int  numClusters,int numObjs,int dimensions,float  **clusters,int  *membership){
+    FILE *fptr;
+    int   i, j;
+    char  outFileName[1024];
+
+    sprintf(outFileName, "%s.output_cluster_centers", filename);
+    printf("Writing coordinates of K=%d cluster centers to file \"%s\"\n",numClusters, outFileName);
+
+    fptr = fopen(outFileName, "w");
+
+    for (i=0; i<numClusters; i++) {
+        fprintf(fptr, "%d ", i);
+
+        for (j=0; j<dimensions; j++)
+            fprintf(fptr, "%f ", clusters[i][j]);
+
+        fprintf(fptr, "\n");
+    }
+    fclose(fptr);
+
+
+    sprintf(outFileName, "%s.output_membership", filename);
+    printf("Writing membership of N=%d data objects to file \"%s\"\n",numObjs, outFileName);
+
+    fptr = fopen(outFileName, "w");
+
+    for (i=0; i<numObjs; i++)
+        fprintf(fptr, "%d %d\n", i, membership[i]);
+
+    fclose(fptr);
+
+    return 1;
 }
 
 
@@ -45,17 +167,17 @@ float euclid_dist_2(int numdims,float *coord1, float *coord2)
 
 /*-------find_nearest_cluster() ---------------------------------------------*/
 __inline static
-int find_nearest_cluster(int numClusters,int numCoords, float  *object,float **clusters)
+int find_nearest_cluster(int numClusters,int dimensions, float  *object,float **clusters)
 {
     int   index, i;
     float dist, min_dist;
 
     /* Finding the cluster id that has min distance to object */
     index    = 0;
-    min_dist = euclid_dist_2(numCoords, object, clusters[0]);
+    min_dist = euclid_dist_2(dimensions, object, clusters[0]);
 
     for (i=1; i<numClusters; i++) {
-        dist = euclid_dist_2(numCoords, object, clusters[i]);
+        dist = euclid_dist_2(dimensions, object, clusters[i]);
         if (dist < min_dist) { /* find the min and its array index */
             min_dist = dist;
             index    = i;
@@ -66,21 +188,21 @@ int find_nearest_cluster(int numClusters,int numCoords, float  *object,float **c
 
 
 /*-------- kmeans_clustering() ------------------------------------------------*/
-/* return an array of cluster centers of size [numClusters][numCoords]       */
-float** omp_kmeans(int is_perform_atomic,float **objects, int numCoords,int numObjs,int numClusters,float threshold,int *membership)
+/* return an array of cluster centers of size [numClusters][dimensions]       */
+float** omp_kmeans(float **objects, int dimensions,int numObjs,int numClusters,float threshold,int *membership,int *loop_iterations)
 {
 
     int i, j, k, index, loop=0;
     int  *newClusterSize; /* [numClusters]: no. objects assigned in each
                                 new cluster */
     float  delta;          /* % of objects change their clusters */
-    float  **clusters;       /* out: [numClusters][numCoords] */
-    float  **newClusters;    /* [numClusters][numCoords] */
+    float  **clusters;       /* out: [numClusters][dimensions] */
+    float  **newClusters;    /* [numClusters][dimensions] */
     double  timing;
 
     int nthreads;             /* no. threads */
     int **local_newClusterSize; /* [nthreads][numClusters] */
-    float ***local_newClusters;    /* [nthreads][numClusters][numCoords] */
+    float ***local_newClusters;    /* [nthreads][numClusters][dimensions] */
 
     nthreads = omp_get_max_threads();
 
@@ -89,15 +211,15 @@ float** omp_kmeans(int is_perform_atomic,float **objects, int numCoords,int numO
     clusters    = (float**) malloc(numClusters *             sizeof(float*));
     assert(clusters != NULL);
 
-    clusters[0] = (float*)  malloc(numClusters * numCoords * sizeof(float));
+    clusters[0] = (float*)  malloc(numClusters * dimensions * sizeof(float));
     assert(clusters[0] != NULL);
 
     for (i=1; i<numClusters; i++)
-        clusters[i] = clusters[i-1] + numCoords;
+        clusters[i] = clusters[i-1] + dimensions;
 
     /* pick first numClusters elements of objects[] as initial cluster centers*/
     for (i=0; i<numClusters; i++)
-        for (j=0; j<numCoords; j++)
+        for (j=0; j<dimensions; j++)
             clusters[i][j] = objects[i][j];
 
     /* initialize membership[] */
@@ -109,140 +231,99 @@ float** omp_kmeans(int is_perform_atomic,float **objects, int numCoords,int numO
 
     newClusters    = (float**) malloc(numClusters *            sizeof(float*));
     assert(newClusters != NULL);
-    newClusters[0] = (float*)  calloc(numClusters * numCoords, sizeof(float));
+    newClusters[0] = (float*)  calloc(numClusters * dimensions, sizeof(float));
     assert(newClusters[0] != NULL);
     for (i=1; i<numClusters; i++)
-        newClusters[i] = newClusters[i-1] + numCoords;
+        newClusters[i] = newClusters[i-1] + dimensions;
 
-    if (!is_perform_atomic) {
-        /* each thread calculates new centers using a private space,
-           then thread 0 does an array reduction on them. This approach
-           should be faster */
-        local_newClusterSize    = (int**) malloc(nthreads * sizeof(int*));
-        assert(local_newClusterSize != NULL);
-        local_newClusterSize[0] = (int*)  calloc(nthreads*numClusters,
-                                                 sizeof(int));
-        assert(local_newClusterSize[0] != NULL);
-        for (i=1; i<nthreads; i++)
-            local_newClusterSize[i] = local_newClusterSize[i-1]+numClusters;
 
-        /* local_newClusters is a 3D array */
-        local_newClusters    =(float***)malloc(nthreads * sizeof(float**));
-        assert(local_newClusters != NULL);
-        local_newClusters[0] =(float**) malloc(nthreads * numClusters *
-                                               sizeof(float*));
-        assert(local_newClusters[0] != NULL);
-        for (i=1; i<nthreads; i++)
-            local_newClusters[i] = local_newClusters[i-1] + numClusters;
-        for (i=0; i<nthreads; i++) {
-            for (j=0; j<numClusters; j++) {
-                local_newClusters[i][j] = (float*)calloc(numCoords,
-                                                         sizeof(float));
-                assert(local_newClusters[i][j] != NULL);
-            }
+    /* each thread calculates new centers using a private space,
+       then thread 0 does an array reduction on them. This approach
+       should be faster */
+    local_newClusterSize    = (int**) malloc(nthreads * sizeof(int*));
+    assert(local_newClusterSize != NULL);
+    local_newClusterSize[0] = (int*)  calloc(nthreads*numClusters,
+                                             sizeof(int));
+    assert(local_newClusterSize[0] != NULL);
+    for (i=1; i<nthreads; i++)
+        local_newClusterSize[i] = local_newClusterSize[i-1]+numClusters;
+
+    /* local_newClusters is a 3D array */
+    local_newClusters    =(float***)malloc(nthreads * sizeof(float**));
+    assert(local_newClusters != NULL);
+    local_newClusters[0] =(float**) malloc(nthreads * numClusters *
+                                           sizeof(float*));
+    assert(local_newClusters[0] != NULL);
+    for (i=1; i<nthreads; i++)
+        local_newClusters[i] = local_newClusters[i-1] + numClusters;
+    for (i=0; i<nthreads; i++) {
+        for (j=0; j<numClusters; j++) {
+            local_newClusters[i][j] = (float*)calloc(dimensions,
+                                                     sizeof(float));
+            assert(local_newClusters[i][j] != NULL);
         }
     }
+
 
     if (_debug) timing = omp_get_wtime();
     do {
         delta = 0.0;
 
-        if (is_perform_atomic) {
-            #pragma omp parallel for \
-                    private(i,j,index) \
-                    firstprivate(numObjs,numClusters,numCoords) \
-                    shared(objects,clusters,membership,newClusters,newClusterSize) \
-                    schedule(static) \
-                    reduction(+:delta)
-            for (i=0; i<numObjs; i++) {
-                /* find the array index of nestest cluster center */
-                index = find_nearest_cluster(numClusters, numCoords, objects[i],
-                                             clusters);
+          #pragma omp parallel \
+                  shared(objects,clusters,membership,local_newClusters,local_newClusterSize)
+          {
+              int tid = omp_get_thread_num();
+              #pragma omp for \
+                          private(i,j,index) \
+                          firstprivate(numObjs,numClusters,dimensions) \
+                          schedule(static) \
+                          reduction(+:delta)
+              for (i=0; i<numObjs; i++) {
+                  /* find the array index of nestest cluster center */
+                  index = find_nearest_cluster(numClusters, dimensions, objects[i], clusters);
 
-                /* if membership changes, increase delta by 1 */
-                if (membership[i] != index) delta += 1.0;
+                  /* if membership changes, increase delta by 1 */
+                  if (membership[i] != index) delta += 1.0;
 
-                /* assign the membership to object i */
-                membership[i] = index;
+                  /* assign the membership to object i */
+                  membership[i] = index;
 
-                /* update new cluster centers : sum of objects located within */
-                #pragma omp atomic
-                newClusterSize[index]++;
-                for (j=0; j<numCoords; j++)
-                    #pragma omp atomic
-                    newClusters[index][j] += objects[i][j];
-            }
-        }
-        else {
-            #pragma omp parallel \
-                    shared(objects,clusters,membership,local_newClusters,local_newClusterSize)
-            {
-                int tid = omp_get_thread_num();
-                #pragma omp for \
-                            private(i,j,index) \
-                            firstprivate(numObjs,numClusters,numCoords) \
-                            schedule(static) \
-                            reduction(+:delta)
-                for (i=0; i<numObjs; i++) {
-                    /* find the array index of nestest cluster center */
-                    index = find_nearest_cluster(numClusters, numCoords,
-                                                 objects[i], clusters);
+                  /* update new cluster centers : sum of all objects located
+                     within (average will be performed later) */
+                  local_newClusterSize[tid][index]++;
+                  for (j=0; j<dimensions; j++)
+                      local_newClusters[tid][index][j] += objects[i][j];
+              }
+          } /* end of #pragma omp parallel */
 
-                    /* if membership changes, increase delta by 1 */
-                    if (membership[i] != index) delta += 1.0;
+          /* let the main thread perform the array reduction */
+          for (i=0; i<numClusters; i++) {
+              for (j=0; j<nthreads; j++) {
+                  newClusterSize[i] += local_newClusterSize[j][i];
+                  local_newClusterSize[j][i] = 0.0;
+                  for (k=0; k<dimensions; k++) {
+                      newClusters[i][k] += local_newClusters[j][i][k];
+                      local_newClusters[j][i][k] = 0.0;
+                  }
+              }
+          }
 
-                    /* assign the membership to object i */
-                    membership[i] = index;
-
-                    /* update new cluster centers : sum of all objects located
-                       within (average will be performed later) */
-                    local_newClusterSize[tid][index]++;
-                    for (j=0; j<numCoords; j++)
-                        local_newClusters[tid][index][j] += objects[i][j];
-                }
-            } /* end of #pragma omp parallel */
-
-            /* let the main thread perform the array reduction */
-            for (i=0; i<numClusters; i++) {
-                for (j=0; j<nthreads; j++) {
-                    newClusterSize[i] += local_newClusterSize[j][i];
-                    local_newClusterSize[j][i] = 0.0;
-                    for (k=0; k<numCoords; k++) {
-                        newClusters[i][k] += local_newClusters[j][i][k];
-                        local_newClusters[j][i][k] = 0.0;
-                    }
-                }
-            }
-        }
-
-        /* average the sum and replace old cluster centers with newClusters */
-        for (i=0; i<numClusters; i++) {
-            for (j=0; j<numCoords; j++) {
-                if (newClusterSize[i] > 1)
-                    clusters[i][j] = newClusters[i][j] / newClusterSize[i];
-                newClusters[i][j] = 0.0;   /* set back to 0 */
-            }
-            newClusterSize[i] = 0;   /* set back to 0 */
-        }
+      /* average the sum and replace old cluster centers with newClusters */
+      for (i=0; i<numClusters; i++) {
+          for (j=0; j<dimensions; j++) {
+              if (newClusterSize[i] > 1)
+                  clusters[i][j] = newClusters[i][j] / newClusterSize[i];
+              newClusters[i][j] = 0.0;   /* set back to 0 */
+          }
+          newClusterSize[i] = 0;   /* set back to 0 */
+      }
 
         delta /= numObjs;
     } while (delta > threshold && loop++ < 500);
 
-    if (_debug) {
-        timing = omp_get_wtime() - timing;
-        printf("nloops = %2d (T = %7.4f)",loop,timing);
-    }
 
-    if (!is_perform_atomic) {
-        free(local_newClusterSize[0]);
-        free(local_newClusterSize);
+    *loop_iterations = loop + 1;
 
-        for (i=0; i<nthreads; i++)
-            for (j=0; j<numClusters; j++)
-                free(local_newClusters[i][j]);
-        free(local_newClusters[0]);
-        free(local_newClusters);
-    }
     free(newClusters[0]);
     free(newClusters);
     free(newClusterSize);
@@ -250,135 +331,65 @@ float** omp_kmeans(int is_perform_atomic,float **objects, int numCoords,int numO
     return clusters;
 }
 
-static void usage(char *argv0, float threshold) {
-    char *help =
-        "Usage: %s [switches] -i filename -n num_clusters\n"
-        "       -i filename    : file containing data to be clustered\n"
-        "       -b             : input file is in binary format (default no)\n"
-        "       -n num_clusters: number of clusters (K must > 1)\n"
-        "       -t threshold   : threshold value (default %.4f)\n"
-        "       -p nproc       : number of threads (default system allocated)\n"
-        "       -a             : perform atomic OpenMP pragma (default no)\n"
-        "       -o             : output timing results (default no)\n"
-        "       -d             : enable debug mode\n";
-    fprintf(stderr, help, argv0, threshold);
-    exit(-1);
-}
 
-/*---< main() >-------------------------------------------------------------*/
 int main(int argc, char **argv) {
-           int     opt;
-    extern char   *optarg;
-    extern int     optind;
-           int     i, j, nthreads;
-           int     isBinaryFile, is_perform_atomic, is_output_timing;
 
-           int     numClusters, numCoords, numObjs;
+           int     i, j;
+           int     numClusters, dimensions, numObjs;
            int    *membership;    /* [numObjs] */
-           char   *filename;
-           float **objects;       /* [numObjs][numCoords] data objects */
-           float **clusters;      /* [numClusters][numCoords] cluster center */
+           char   filename[100];
+           float **objects;       /* [numObjs][dimensions] data objects */
+           float **clusters;      /* [numClusters][dimensions] cluster center */
            float   threshold;
-           double  timing, io_timing, clustering_timing;
+           double  timing, clustering_timing;
+           int     loop_iterations;
+
 
     /* some default values */
-    _debug            = 0;
-    nthreads          = 0;
     numClusters       = 0;
     threshold         = 0.001;
-    numClusters       = 0;
-    isBinaryFile      = 0;
-    is_output_timing  = 0;
-    is_perform_atomic = 0;
-    filename          = NULL;
 
-    while ( (opt=getopt(argc,argv,"p:i:n:t:abdo"))!= EOF) {
-        switch (opt) {
-            case 'i': filename=optarg;
-                      break;
-            case 'b': isBinaryFile = 1;
-                      break;
-            case 't': threshold=atof(optarg);
-                      break;
-            case 'n': numClusters = atoi(optarg);
-                      break;
-            case 'p': nthreads = atoi(optarg);
-                      break;
-            case 'a': is_perform_atomic = 1;
-                      break;
-            case 'o': is_output_timing = 1;
-                      break;
-            case 'd': _debug = 1;
-                      break;
-            case '?': usage(argv[0], threshold);
-                      break;
-            default: usage(argv[0], threshold);
-                      break;
-        }
+    printf("Usage-> Arguments: filename  num_clusters\n");
+
+    if(argc == 3){
+       sscanf(argv[1],"%s",filename);
+       sscanf(argv[2],"%d",&numClusters);
     }
 
-    if (filename == 0 || numClusters <= 1) usage(argv[0], threshold);
+    objects = file_read( filename, &numObjs, &dimensions);
 
-    /* set the no. threads if specified in command line, else use all
-       threads allocated by run-time system */
-    if (nthreads > 0)
-        omp_set_num_threads(nthreads);
-
-    if (is_output_timing) io_timing = omp_get_wtime();
-
-    /* read data points from file ------------------------------------------*/
-    objects = file_read(isBinaryFile, filename, &numObjs, &numCoords);
     if (objects == NULL) exit(1);
 
-    if (is_output_timing) {
-        timing            = omp_get_wtime();
-        io_timing         = timing - io_timing;
-        clustering_timing = timing;
-    }
+    timing            = omp_get_wtime();
+    clustering_timing = timing;
 
-    /* start the core computation -------------------------------------------*/
-    /* membership: the cluster id for each data object */
-    membership = (int*) malloc(numObjs * sizeof(int));
+    membership = (int*) malloc(numObjs * sizeof(int));        /* membership: the cluster id for each data object */
+
     assert(membership != NULL);
 
-    clusters = omp_kmeans(is_perform_atomic, objects, numCoords, numObjs,
-                          numClusters, threshold, membership);
+    clusters = omp_kmeans(objects, dimensions, numObjs, numClusters, threshold, membership,&loop_iterations);
 
     free(objects[0]);
     free(objects);
 
-    if (is_output_timing) {
-        timing            = omp_get_wtime();
-        clustering_timing = timing - clustering_timing;
-    }
+    timing            = omp_get_wtime();
+    clustering_timing = timing - clustering_timing;
 
-    /* output: the coordinates of the cluster centres ----------------------*/
-    file_write(filename, numClusters, numObjs, numCoords, clusters, membership);
+    file_write(filename, numClusters, numObjs, dimensions, clusters, membership);
 
     free(membership);
     free(clusters[0]);
     free(clusters);
 
-    /*---- output performance numbers ---------------------------------------*/
-    if (is_output_timing) {
-        io_timing += omp_get_wtime() - timing;
-
-        printf("\nPerforming **** Regular Kmeans  (OpenMP) ----");
-        if (is_perform_atomic)
-            printf(" using atomic pragma ******\n");
-        else
-            printf(" using array reduction ******\n");
-
-        printf("Number of threads = %d\n", omp_get_max_threads());
-        printf("Input file:     %s\n", filename);
-        printf("numObjs       = %d\n", numObjs);
-        printf("numCoords     = %d\n", numCoords);
-        printf("numClusters   = %d\n", numClusters);
-        printf("threshold     = %.4f\n", threshold);
-
-        printf("I/O time           = %10.4f sec\n", io_timing);
-        printf("Computation timing = %10.4f sec\n", clustering_timing);
-    }
+    printf("\nPerforming **** Regular Kmeans  (Parallel Version using OpenMP)*******\n");
+    printf("Number of threads = %d\n", omp_get_max_threads());
+    printf("Input file:     %s\n", filename);
+    printf("numObjs       = %d\n", numObjs);
+    printf("dimensions     = %d\n", dimensions);
+    printf("numClusters   = %d\n", numClusters);
+    printf("threshold     = %.4f\n", threshold);
+    printf("Loop iterations    = %d\n", loop_iterations);
+    printf("Computation timing = %10.4f sec\n", clustering_timing);
 
     return(0);
 }
