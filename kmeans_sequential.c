@@ -4,8 +4,8 @@
 
 /* [numClusters]: no. objects assigned in each new cluster */
 /*delta :  % of objects change their clusters */
-/* **clusters: out: [numClusters][dimentions] */
-/* **newClusters: [numClusters][dimentions] */
+/* **clusters: out: [numClusters][dimensions] */
+/* **newClusters: [numClusters][dimensions] */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -159,29 +159,29 @@ int file_write(char *filename,int  numClusters,int numObjs,int numCoords,float  
 
 
 
-__inline static float euclidian_distance(int dimentions, float *x1, float *x2)
+__inline static float euclidian_distance(int dimensions, float *x1, float *x2)
 {
     int i;
     float ans=0.0;
 
-    for (i=0; i<dimentions; i++)
+    for (i=0; i<dimensions; i++)
         ans += (x1[i]-x2[i]) * (x1[i]-x2[i]);
 
     return(ans);
 }
 
 
-__inline static int find_nearest_cluster(int numClusters, int dimentions, float *object, float **clusters)
+__inline static int find_nearest_cluster(int numClusters, int dimensions, float *object, float **clusters)
 {
     int   j, i;
     float dist, min_d;
 
-    min_d = euclidian_distance(dimentions, object, clusters[0]);
+    min_d = euclidian_distance(dimensions, object, clusters[0]);
     j = 0;
 
     for (i=1; i<numClusters; i++) {
 
-        dist = euclidian_distance(dimentions, object, clusters[i]);
+        dist = euclidian_distance(dimensions, object, clusters[i]);
 
         if (dist < min_d) {
             min_d = dist;
@@ -192,8 +192,8 @@ __inline static int find_nearest_cluster(int numClusters, int dimentions, float 
 }
 
 
-/* Return a 2D array of cluster centers of size [numClusters][dimentions]       */
-float** seq_kmeans(float **objects, int  dimentions, int numObjs,int numClusters,float threshold,int *membership,int *loop_iterations){
+/* Return a 2D array of cluster centers of size [numClusters][dimensions]       */
+float** seq_kmeans(float **objects, int  dimensions, int numObjs,int numClusters,float threshold,int *membership,int *loop_iterations){
 
     int  i, j, index, loop=0;
     int  *newClusterSize;
@@ -204,15 +204,15 @@ float** seq_kmeans(float **objects, int  dimentions, int numObjs,int numClusters
     clusters    = (float**) malloc(numClusters * sizeof(float*));
     assert(clusters != NULL);
 
-    clusters[0] = (float*)  malloc(numClusters * dimentions * sizeof(float));
+    clusters[0] = (float*)  malloc(numClusters * dimensions * sizeof(float));
     assert(clusters[0] != NULL);
 
     for (i=1; i<numClusters; i++)
-        clusters[i] = clusters[i-1] + dimentions;
+        clusters[i] = clusters[i-1] + dimensions;
 
 
       for (i=0; i<numClusters; i++)                       /* picking up first numClusters elements of objects[] as initial cluster centers*/
-        for (j=0; j<dimentions; j++)
+        for (j=0; j<dimensions; j++)
             clusters[i][j] = objects[i][j];
 
 
@@ -225,16 +225,16 @@ float** seq_kmeans(float **objects, int  dimentions, int numObjs,int numClusters
     newClusters    = (float**) malloc(numClusters * sizeof(float*));
     assert(newClusters != NULL);
 
-    newClusters[0] = (float*)  calloc(numClusters * dimentions, sizeof(float));
+    newClusters[0] = (float*)  calloc(numClusters * dimensions, sizeof(float));
     assert(newClusters[0] != NULL);
 
     for (i=1; i<numClusters; i++)
-        newClusters[i] = newClusters[i-1] + dimentions;
+        newClusters[i] = newClusters[i-1] + dimensions;
 
     do {
         delta = 0.0;
         for (i=0; i<numObjs; i++) {
-            index = find_nearest_cluster(numClusters, dimentions, objects[i], clusters);
+            index = find_nearest_cluster(numClusters, dimensions, objects[i], clusters);
 
             if (membership[i] != index)
               delta += 1.0;
@@ -242,12 +242,12 @@ float** seq_kmeans(float **objects, int  dimentions, int numObjs,int numClusters
             membership[i] = index;
 
             newClusterSize[index]++;
-            for (j=0; j<dimentions; j++)
+            for (j=0; j<dimensions; j++)
                 newClusters[index][j] += objects[i][j];
         }
 
         for (i=0; i<numClusters; i++) {
-            for (j=0; j<dimentions; j++) {
+            for (j=0; j<dimensions; j++) {
 
                 if (newClusterSize[i] > 0)
                     clusters[i][j] = newClusters[i][j] / newClusterSize[i];
@@ -273,11 +273,11 @@ float** seq_kmeans(float **objects, int  dimentions, int numObjs,int numClusters
 int main(int argc, char **argv) {
 
     int     i, j;
-    int     numClusters, dimentions, numObjs;
+    int     numClusters, dimensions, numObjs;
     int    *membership;    /* [numObjs] */
     char   filename[100];
-    float **objects;       /* [numObjs][dimentions] data objects */
-    float **clusters;      /* [numClusters][dimentions] cluster center */
+    float **objects;       /* [numObjs][dimensions] data objects */
+    float **clusters;      /* [numClusters][dimensions] cluster center */
     float   threshold;
     double  timing, clustering_timing;
     int     loop_iterations;
@@ -295,7 +295,7 @@ int main(int argc, char **argv) {
 
     if (strlen(filename) == 0 || numClusters <= 1) {     printf("Invalid Arguments\n"); exit(-1); }
 
-    objects = file_read(filename, &numObjs, &dimentions);
+    objects = file_read(filename, &numObjs, &dimensions);
     if (objects == NULL) exit(1);
 
     timing            = wtime();
@@ -305,7 +305,7 @@ int main(int argc, char **argv) {
 
     assert(membership != NULL);
 
-    clusters = seq_kmeans(objects, dimentions, numObjs, numClusters, threshold, membership, &loop_iterations);
+    clusters = seq_kmeans(objects, dimensions, numObjs, numClusters, threshold, membership, &loop_iterations);
 
     free(objects[0]);
     free(objects);
@@ -314,7 +314,7 @@ int main(int argc, char **argv) {
     clustering_timing = timing - clustering_timing;
 
 
-    file_write(filename, numClusters, numObjs, dimentions, clusters, membership);
+    file_write(filename, numClusters, numObjs, dimensions, clusters, membership);
 
     free(membership);
     free(clusters[0]);
@@ -323,7 +323,7 @@ int main(int argc, char **argv) {
     printf("\nPerforming **** Regular Kmeans (sequential version) ****\n");
     printf("Input file:     %s\n", filename);
     printf("numObjs       = %d\n", numObjs);
-    printf("dimentions     = %d\n", dimentions);
+    printf("dimensions     = %d\n", dimensions);
     printf("numClusters   = %d\n", numClusters);
     printf("threshold     = %.4f\n", threshold);
     printf("Loop iterations    = %d\n", loop_iterations);
