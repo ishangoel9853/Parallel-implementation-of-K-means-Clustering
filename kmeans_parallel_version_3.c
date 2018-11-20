@@ -1,4 +1,12 @@
 
+//***********************************PARALLEL K-MEANS CLUSTERING (USING OMP)**************************************
+
+/* [numClusters]: no. objects assigned in each new cluster */
+/*delta :  % of objects change their clusters */
+/* **clusters: out: [numClusters][dimensions] */
+/* **newClusters: [numClusters][dimensions] */
+
+
 #include <sys/time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,7 +19,7 @@
 
 
 #include <omp.h>
-int      _debug;
+int     _debug;
 #define MAX_CHAR_PER_LINE 128
 
 
@@ -151,8 +159,6 @@ int file_write(char *filename,int  numClusters,int numObjs,int dimensions,float 
 }
 
 
-/*-------- euclid_dist_2()----------------------------------------------------*/
-/* square of Euclid distance between two multi-dimensional points            */
 __inline static
 float euclid_dist_2(int numdims,float *coord1, float *coord2)
 {
@@ -165,7 +171,6 @@ float euclid_dist_2(int numdims,float *coord1, float *coord2)
     return(ans);
 }
 
-/*-------find_nearest_cluster() ---------------------------------------------*/
 __inline static
 int find_nearest_cluster(int numClusters,int dimensions, float  *object,float **clusters)
 {
@@ -187,27 +192,22 @@ int find_nearest_cluster(int numClusters,int dimensions, float  *object,float **
 }
 
 
-/*-------- kmeans_clustering() ------------------------------------------------*/
-/* return an array of cluster centers of size [numClusters][dimensions]       */
+
 float** omp_kmeans(float **objects, int dimensions,int numObjs,int numClusters,float threshold,int *membership,int *loop_iterations)
 {
 
     int i, j, k, index, loop=0;
-    int  *newClusterSize; /* [numClusters]: no. objects assigned in each
-                                new cluster */
-    float  delta;          /* % of objects change their clusters */
-    float  **clusters;       /* out: [numClusters][dimensions] */
-    float  **newClusters;    /* [numClusters][dimensions] */
+    int  *newClusterSize;
+    float  delta;
+    float  **clusters;
+    float  **newClusters;
     double  timing;
-
-    int nthreads;             /* no. threads */
-    int **local_newClusterSize; /* [nthreads][numClusters] */
-    float ***local_newClusters;    /* [nthreads][numClusters][dimensions] */
+    int nthreads;
+    int **local_newClusterSize;
+    float ***local_newClusters;
 
     nthreads = omp_get_max_threads();
 
-    /* allocate a 2D space for returning variable clusters[] (coordinates
-       of cluster centers) */
     clusters    = (float**) malloc(numClusters *             sizeof(float*));
     assert(clusters != NULL);
 
@@ -217,15 +217,12 @@ float** omp_kmeans(float **objects, int dimensions,int numObjs,int numClusters,f
     for (i=1; i<numClusters; i++)
         clusters[i] = clusters[i-1] + dimensions;
 
-    /* pick first numClusters elements of objects[] as initial cluster centers*/
     for (i=0; i<numClusters; i++)
         for (j=0; j<dimensions; j++)
             clusters[i][j] = objects[i][j];
 
-    /* initialize membership[] */
     for (i=0; i<numObjs; i++) membership[i] = -1;
 
-    /* need to initialize newClusterSize and newClusters[0] to all 0 */
     newClusterSize = (int*) calloc(numClusters, sizeof(int));
     assert(newClusterSize != NULL);
 
@@ -236,10 +233,6 @@ float** omp_kmeans(float **objects, int dimensions,int numObjs,int numClusters,f
     for (i=1; i<numClusters; i++)
         newClusters[i] = newClusters[i-1] + dimensions;
 
-
-    /* each thread calculates new centers using a private space,
-       then thread 0 does an array reduction on them. This approach
-       should be faster */
     local_newClusterSize    = (int**) malloc(nthreads * sizeof(int*));
     assert(local_newClusterSize != NULL);
     local_newClusterSize[0] = (int*)  calloc(nthreads*numClusters,
@@ -248,7 +241,8 @@ float** omp_kmeans(float **objects, int dimensions,int numObjs,int numClusters,f
     for (i=1; i<nthreads; i++)
         local_newClusterSize[i] = local_newClusterSize[i-1]+numClusters;
 
-    /* local_newClusters is a 3D array */
+
+//**3D Array
     local_newClusters    =(float***)malloc(nthreads * sizeof(float**));
     assert(local_newClusters != NULL);
     local_newClusters[0] =(float**) malloc(nthreads * numClusters *
@@ -279,24 +273,20 @@ float** omp_kmeans(float **objects, int dimensions,int numObjs,int numClusters,f
                           schedule(static) \
                           reduction(+:delta)
               for (i=0; i<numObjs; i++) {
-                  /* find the array index of nestest cluster center */
+
                   index = find_nearest_cluster(numClusters, dimensions, objects[i], clusters);
 
-                  /* if membership changes, increase delta by 1 */
                   if (membership[i] != index) delta += 1.0;
 
-                  /* assign the membership to object i */
                   membership[i] = index;
 
-                  /* update new cluster centers : sum of all objects located
-                     within (average will be performed later) */
                   local_newClusterSize[tid][index]++;
                   for (j=0; j<dimensions; j++)
                       local_newClusters[tid][index][j] += objects[i][j];
               }
           } /* end of #pragma omp parallel */
 
-          /* let the main thread perform the array reduction */
+          // Main thread performs the array reduction
           for (i=0; i<numClusters; i++) {
               for (j=0; j<nthreads; j++) {
                   newClusterSize[i] += local_newClusterSize[j][i];
@@ -308,14 +298,13 @@ float** omp_kmeans(float **objects, int dimensions,int numObjs,int numClusters,f
               }
           }
 
-      /* average the sum and replace old cluster centers with newClusters */
       for (i=0; i<numClusters; i++) {
           for (j=0; j<dimensions; j++) {
               if (newClusterSize[i] > 1)
                   clusters[i][j] = newClusters[i][j] / newClusterSize[i];
-              newClusters[i][j] = 0.0;   /* set back to 0 */
+              newClusters[i][j] = 0.0;
           }
-          newClusterSize[i] = 0;   /* set back to 0 */
+          newClusterSize[i] = 0;
       }
 
         delta /= numObjs;
@@ -345,7 +334,7 @@ int main(int argc, char **argv) {
            int     loop_iterations;
 
 
-    /* some default values */
+    // Default values
     numClusters       = 0;
     threshold         = 0.001;
 
