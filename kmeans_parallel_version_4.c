@@ -172,24 +172,34 @@ float euclid_dist_2(int numdims,float *coord1, float *coord2)
     return(ans);
 }
 
-__inline static
-int find_nearest_cluster(int numClusters,int dimensions, float  *object,float **clusters)
-{
-    int   index, i;
-    float dist, min_dist;
+__inline static int find_nearest_cluster(int numClusters, int dimentions, float *object, float **clusters)
+{       
+    int   j, i;
+    float min_d;
 
-    /* Finding the cluster id that has min distance to object */
-    index    = 0;
-    min_dist = euclid_dist_2(dimensions, object, clusters[0]);
+    float* dist = (float*) malloc(numClusters * sizeof(float));
 
-    for (i=1; i<numClusters; i++) {
-        dist = euclid_dist_2(dimensions, object, clusters[i]);
-        if (dist < min_dist) { /* find the min and its array index */
-            min_dist = dist;
-            index    = i;
-        }
+    min_d = euclid_dist_2(dimentions, object, clusters[0]);
+    j = 0;
+    
+    #pragma omp parallel for
+    for (i=0; i<numClusters; i++) {
+        dist[i] = euclid_dist_2(dimentions, object, clusters[i]);    
     }
-    return(index);
+
+    min_d = dist[0];
+    j=0;
+
+    #pragma omp parallel for reduction(min:min_d)
+    for (i=0; i<numClusters; i++) {
+        if(min_d<dist[i])
+        {        
+            min_d = dist[i] ;    
+            j=i;
+        }    
+    }
+
+    return(j);
 }
 
 
@@ -371,7 +381,7 @@ int main(int argc, char **argv) {
     free(clusters[0]);
     free(clusters);
 
-    printf("\nPerforming **** Regular Kmeans  (Parallel Version using OpenMP)*******\n");
+    printf("\nPerforming **** Regular Kmeans V4 (Parallel Version using OpenMP)*******\n");
     printf("Number of threads = %d\n", omp_get_max_threads());
     printf("Input file:     %s\n", filename);
     printf("numObjs       = %d\n", numObjs);

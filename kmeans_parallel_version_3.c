@@ -370,7 +370,7 @@ int main(int argc, char **argv) {
     free(clusters[0]);
     free(clusters);
 
-    printf("\nPerforming **** Regular Kmeans  (Parallel Version using OpenMP)*******\n");
+    printf("\nPerforming **** Regular Kmeans V3 (Parallel Version using OpenMP)*******\n");
     printf("Number of threads = %d\n", omp_get_max_threads());
     printf("Input file:     %s\n", filename);
     printf("numObjs       = %d\n", numObjs);
