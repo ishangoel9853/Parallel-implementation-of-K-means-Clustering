@@ -217,9 +217,9 @@ float** omp_kmeans(float **objects, int dimensions,int numObjs,int numClusters,f
     for (i=1; i<numClusters; i++)
         clusters[i] = clusters[i-1] + dimensions;
 
-    for (i=0; i<numClusters; i++)
+    for (i=0,index=0; index<numClusters; i+= numObjs/numClusters-1,index++)
         for (j=0; j<dimensions; j++)
-            clusters[i][j] = objects[i][j];
+            clusters[index][j] = objects[i][j];
 
     for (i=0; i<numObjs; i++) membership[i] = -1;
 

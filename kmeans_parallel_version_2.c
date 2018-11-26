@@ -1,3 +1,11 @@
+//***********************************PARALLEL K-MEANS CLUSTERING (USING OMP)**************************************
+
+/* [numClusters]: no. objects assigned in each new cluster */
+/*delta :  % of objects change their clusters */
+/* **clusters: out: [numClusters][dimensions] */
+/* **newClusters: [numClusters][dimensions] */
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>     /* strtok() */
@@ -13,7 +21,7 @@
 #define MAX_CHAR_PER_LINE 128
 
 
-double wtime(void) 
+double wtime(void)
 {
     double          now_time;
     struct timeval  etstart;
@@ -85,7 +93,7 @@ float** file_read(char *filename,      /* input file name */
         rewind(infile);
         printf("File %s numObjs   = %d\n",filename,*numObjs);
         printf("File %s numCoords = %d\n",filename,*numCoords);
-    
+
         /* allocate space for objects[][] and read all objects */
         len = (*numObjs) * (*numCoords);
         objects    = (float**)malloc((*numObjs) * sizeof(float*));
@@ -106,7 +114,7 @@ float** file_read(char *filename,      /* input file name */
 
         fclose(infile);
         free(line);
-    
+
     return objects;
 }
 
@@ -125,9 +133,9 @@ int file_write(char      *filename,     /* input file name */
 
     sprintf(outFileName, "%s.output_cluster_centers", filename);
     printf("Writing coordinates of K=%d cluster centers to file \"%s\"\n",numClusters, outFileName);
-    
+
     fptr = fopen(outFileName, "w");
-    
+
     for (i=0; i<numClusters; i++) {
         fprintf(fptr, "%d ", i);
         for (j=0; j<numCoords; j++)
@@ -136,10 +144,10 @@ int file_write(char      *filename,     /* input file name */
     }
     fclose(fptr);
 
-    
+
     sprintf(outFileName, "%s.output_membership", filename);
     printf("Writing membership of N=%d data objects to file \"%s\"\n",numObjs, outFileName);
-    
+
     fptr = fopen(outFileName, "w");
     for (i=0; i<numObjs; i++)
         fprintf(fptr, "%d %d\n", i, membership[i]);
@@ -148,33 +156,29 @@ int file_write(char      *filename,     /* input file name */
     return 1;
 }
 
-__inline static float euclidian_distance(int dimentions, float *x1, float *x2)
+__inline static float euclid_dist_2(int dimensions, float *x1, float *x2)
 {
     int i;
     float ans=0.0;
-    for (i=0; i<dimentions; i++)
+    for (i=0; i<dimensions; i++)
     {
 
         ans += (x1[i]-x2[i]) * (x1[i]-x2[i]);
     }
-    
+
     return(ans);
 }
 
-
-__inline static int find_nearest_cluster(int numClusters, int dimentions, float *object, float **clusters)
-{       
+__inline static int find_nearest_cluster(int numClusters, int dimensions, float *object, float **clusters)
+{
     int   j, i;
     float min_d;
 
     float* dist = (float*) malloc(numClusters * sizeof(float));
 
-    min_d = euclidian_distance(dimentions, object, clusters[0]);
-    j = 0;
-    
     #pragma omp parallel for
     for (i=0; i<numClusters; i++) {
-        dist[i] = euclidian_distance(dimentions, object, clusters[i]);    
+        dist[i] = euclid_dist_2(dimensions, object, clusters[i]);
     }
 
     min_d = dist[0];
@@ -182,20 +186,30 @@ __inline static int find_nearest_cluster(int numClusters, int dimentions, float 
 
     #pragma omp parallel for reduction(min:min_d)
     for (i=0; i<numClusters; i++) {
-        if(min_d<dist[i])
-        {        
-            min_d = dist[i] ;    
-            j=i;
-        }    
+        if(min_d>dist[i])
+        {
+            min_d = dist[i] ;
+        }
     }
+
+   #pragma omp parallel for
+    for (i=0; i<numClusters; i++) {
+        if(min_d==dist[i])
+        {
+            j = i ;
+        }
+    }
+
 
     return(j);
 }
 
 
-/* return an array of cluster centers of size [numClusters][dimentions]       */
-float** seq_kmeans(float **objects,      /* in: [numObjs][dimentions] */
-                   int     dimentions,    /* no. features */
+
+
+/* return an array of cluster centers of size [numClusters][dimensions]       */
+float** seq_kmeans(float **objects,      /* in: [numObjs][dimensions] */
+                   int     dimensions,    /* no. features */
                    int     numObjs,      /* no. objects */
                    int     numClusters,  /* no. clusters */
                    float   threshold,    /* % objects change membership */
@@ -206,21 +220,21 @@ float** seq_kmeans(float **objects,      /* in: [numObjs][dimentions] */
     int     *newClusterSize; /* [numClusters]: no. objects assigned in each
                                 new cluster */
     float    delta;          /* % of objects change their clusters */
-    float  **clusters;       /* out: [numClusters][dimentions] */
-    float  **newClusters;    /* [numClusters][dimentions] */
+    float  **clusters;       /* out: [numClusters][dimensions] */
+    float  **newClusters;    /* [numClusters][dimensions] */
 
 
     clusters    = (float**) malloc(numClusters * sizeof(float*));
     assert(clusters != NULL);
-    clusters[0] = (float*)  malloc(numClusters * dimentions * sizeof(float));
+    clusters[0] = (float*)  malloc(numClusters * dimensions * sizeof(float));
     assert(clusters[0] != NULL);
     for (i=1; i<numClusters; i++)
-        clusters[i] = clusters[i-1] + dimentions;
+        clusters[i] = clusters[i-1] + dimensions;
 
 
     /* pick first numClusters elements of objects[] as initial cluster centers*/
     for (i=0,index=0; index<numClusters; i+= numObjs/numClusters-1,index++)
-        for (j=0; j<dimentions; j++)
+        for (j=0; j<dimensions; j++)
             clusters[index][j] = objects[i][j];
 
     /* initialize membership[] */
@@ -232,17 +246,17 @@ float** seq_kmeans(float **objects,      /* in: [numObjs][dimentions] */
     assert(newClusterSize != NULL);
     newClusters    = (float**) malloc(numClusters * sizeof(float*));
     assert(newClusters != NULL);
-    newClusters[0] = (float*)  calloc(numClusters * dimentions, sizeof(float));
+    newClusters[0] = (float*)  calloc(numClusters * dimensions, sizeof(float));
     assert(newClusters[0] != NULL);
     for (i=1; i<numClusters; i++)
-        newClusters[i] = newClusters[i-1] + dimentions;
+        newClusters[i] = newClusters[i-1] + dimensions;
 
 
     do {
         delta = 0.0;
         for (i=0; i<numObjs; i++) {
             /* find the array index of nestest cluster center */
-            index = find_nearest_cluster(numClusters, dimentions, objects[i],
+            index = find_nearest_cluster(numClusters, dimensions, objects[i],
                                          clusters);
 
             /* if membership changes, increase delta by 1 */
@@ -253,20 +267,20 @@ float** seq_kmeans(float **objects,      /* in: [numObjs][dimentions] */
 
             /* update new cluster centers : sum of objects located within */
             newClusterSize[index]++;
-            for (j=0; j<dimentions; j++)
+            for (j=0; j<dimensions; j++)
                 newClusters[index][j] += objects[i][j];
         }
 
         /* average the sum and replace old cluster centers with newClusters */
         for (i=0; i<numClusters; i++) {
-            for (j=0; j<dimentions; j++) {
+            for (j=0; j<dimensions; j++) {
                 if (newClusterSize[i] > 0)
                     clusters[i][j] = newClusters[i][j] / newClusterSize[i];
                 newClusters[i][j] = 0.0;   /* set back to 0 */
             }
             newClusterSize[i] = 0;   /* set back to 0 */
         }
-            
+
         delta /= numObjs;
     } while (delta > threshold && loop++ < 500);
 
@@ -281,16 +295,16 @@ float** seq_kmeans(float **objects,      /* in: [numObjs][dimentions] */
 
 
 int main(int argc, char **argv) {
-         
+
 
     //  omp_set_num_threads(8); /*to set number of threads*/
-             
+
     int     i, j;
-    int     numClusters, dimentions, numObjs;
+    int     numClusters, dimensions, numObjs;
     int    *membership;    /* [numObjs] */
     char   filename[100];
-    float **objects;       /* [numObjs][dimentions] data objects */
-    float **clusters;      /* [numClusters][dimentions] cluster center */
+    float **objects;       /* [numObjs][dimensions] data objects */
+    float **clusters;      /* [numClusters][dimensions] cluster center */
     float   threshold;
     double  timing, clustering_timing;
     int     loop_iterations;
@@ -306,9 +320,9 @@ int main(int argc, char **argv) {
        sscanf(argv[2],"%d",&numClusters);
     }
 
-    if (strlen(filename) == 0 || numClusters <= 1) {     printf("Invalid Arguments\n"); exit(-1); } 
+    if (strlen(filename) == 0 || numClusters <= 1) {     printf("Invalid Arguments\n"); exit(-1); }
 
-    objects = file_read(filename, &numObjs, &dimentions);
+    objects = file_read(filename, &numObjs, &dimensions);
     if (objects == NULL) exit(1);
 
     timing            = wtime();
@@ -318,7 +332,7 @@ int main(int argc, char **argv) {
 
     assert(membership != NULL);
 
-    clusters = seq_kmeans(objects, dimentions, numObjs, numClusters, threshold, membership, &loop_iterations);
+    clusters = seq_kmeans(objects, dimensions, numObjs, numClusters, threshold, membership, &loop_iterations);
 
     free(objects[0]);
     free(objects);
@@ -326,8 +340,8 @@ int main(int argc, char **argv) {
     timing            = wtime();
     clustering_timing = timing - clustering_timing;
 
-    
-    file_write(filename, numClusters, numObjs, dimentions, clusters, membership);
+
+    file_write(filename, numClusters, numObjs, dimensions, clusters, membership);
 
     free(membership);
     free(clusters[0]);
@@ -338,7 +352,7 @@ int main(int argc, char **argv) {
 
     printf("Input file:     %s\n", filename);
     printf("numObjs       = %d\n", numObjs);
-    printf("dimentions     = %d\n", dimentions);
+    printf("dimensions     = %d\n", dimensions);
     printf("numClusters   = %d\n", numClusters);
     printf("threshold     = %.4f\n", threshold);
     printf("Loop iterations    = %d\n", loop_iterations);

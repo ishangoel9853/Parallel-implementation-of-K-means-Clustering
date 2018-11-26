@@ -169,19 +169,16 @@ float euclid_dist_2(int numdims,float *coord1, float *coord2){
     return(ans);
 }
 
-__inline static int find_nearest_cluster(int numClusters, int dimentions, float *object, float **clusters)
+__inline static int find_nearest_cluster(int numClusters, int dimensions, float *object, float **clusters)
 {
     int   j, i;
     float min_d;
 
     float* dist = (float*) malloc(numClusters * sizeof(float));
 
-    min_d = euclidian_distance(dimentions, object, clusters[0]);
-    j = 0;
-
     #pragma omp parallel for
     for (i=0; i<numClusters; i++) {
-        dist[i] = euclidian_distance(dimentions, object, clusters[i]);
+        dist[i] = euclid_dist_2(dimensions, object, clusters[i]);
     }
 
     min_d = dist[0];
@@ -189,12 +186,20 @@ __inline static int find_nearest_cluster(int numClusters, int dimentions, float 
 
     #pragma omp parallel for reduction(min:min_d)
     for (i=0; i<numClusters; i++) {
-        if(min_d<dist[i])
+        if(min_d>dist[i])
         {
             min_d = dist[i] ;
-            j=i;
         }
     }
+
+   #pragma omp parallel for
+    for (i=0; i<numClusters; i++) {
+        if(min_d==dist[i])
+        {
+            j = i ;
+        }
+    }
+
 
     return(j);
 }
@@ -226,9 +231,9 @@ float** omp_kmeans(float **objects, int dimensions,int numObjs,int numClusters,f
     for (i=1; i<numClusters; i++)
         clusters[i] = clusters[i-1] + dimensions;
 
-    for (i=0; i<numClusters; i++)
+    for (i=0,index=0; index<numClusters; i+= numObjs/numClusters-1,index++)
         for (j=0; j<dimensions; j++)
-            clusters[i][j] = objects[i][j];
+            clusters[index][j] = objects[i][j];
 
     for (i=0; i<numObjs; i++) membership[i] = -1;
 
@@ -251,7 +256,7 @@ float** omp_kmeans(float **objects, int dimensions,int numObjs,int numClusters,f
         local_newClusterSize[i] = local_newClusterSize[i-1]+numClusters;
 
 
-//**3D Array
+        //**3D Array
     local_newClusters    =(float***)malloc(nthreads * sizeof(float**));
     assert(local_newClusters != NULL);
     local_newClusters[0] =(float**) malloc(nthreads * numClusters *
@@ -379,7 +384,7 @@ int main(int argc, char **argv) {
     free(clusters[0]);
     free(clusters);
 
-    printf("\nPerforming **** Regular Kmeans  (Parallel Version using OpenMP)*******\n");
+    printf("\nPerforming **** Regular Kmeans V4 (Parallel Version using OpenMP)*******\n");
     printf("Number of threads = %d\n", omp_get_max_threads());
     printf("Input file:     %s\n", filename);
     printf("numObjs       = %d\n", numObjs);
