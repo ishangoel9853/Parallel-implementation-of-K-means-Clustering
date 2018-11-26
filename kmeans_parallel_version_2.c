@@ -219,9 +219,9 @@ float** seq_kmeans(float **objects,      /* in: [numObjs][dimentions] */
 
 
     /* pick first numClusters elements of objects[] as initial cluster centers*/
-    for (i=0; i<numClusters; i++)
+    for (i=0,index=0; index<numClusters; i+= numObjs/numClusters-1,index++)
         for (j=0; j<dimentions; j++)
-            clusters[i][j] = objects[i][j];
+            clusters[index][j] = objects[i][j];
 
     /* initialize membership[] */
     for (i=0; i<numObjs; i++) membership[i] = -1;
